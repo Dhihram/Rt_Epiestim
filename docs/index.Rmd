@@ -1,0 +1,136 @@
+---
+title: "Rt Depok Epiestim"
+author: "Dhihram Tenrisau"
+date: '2022-06-07'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+# Pendahuluan
+
+<p><i>"All model are wrong some are useful"</i></p>
+<p> --George EP Box-- </p>
+
+<p> Rt atau <i> Reproductive Effective </i> adalah sebuah metode untuk mengestimasi transmisi penyakit dengan asumsi bahwa intervensi pencegahan dilakukan. Rt menjadi salah satu indikator kesehatan masyarakat dan transmisi pada interim pada tahun 2021. (1) </p>
+
+<p> Rt adalah model epidemik yang seperti kata George EP Box di atas, bisa jadi tidak presisi dengan kenyataan di lapangan, namun ketika ditafsirkan dengan benar, ini dapat mendorong intervensi dan kebijakan yang lebih baik. </p>
+
+
+# Mengaktifkan Package
+
+Beberapa <i>package</i> yang digunakan dalam analisis ini
+```{r message=FALSE, warning=FALSE}
+library(tidyverse) #untuk cleaning
+library(dplyr) #untuk cleaning
+library(rio) #untuk ekspor xlsx
+library(EpiEstim) 
+library(ggplot2) #untuk grafik
+library(incidence) #untuk kurva epidemiologi
+library(lubridate) #untuk tanggal
+library(plotly) #untuk tampilan interaktif grafik
+library(DT) #untuk tampilan interaktif tabel
+library(zoo) #untuk moving average
+library(readr) #membaca csv
+```
+
+# Membuka File
+Di tutorial ini saya menggunakan data dari komputer saya, sehingga perlu menyesuaikan sesuai dari tempat menyimpan di komputer
+```{r include=FALSE}
+setwd("C:/Users/dhihr/Downloads")
+X220606_kasus_kako_harian_data <- read_csv("C:/Users/dhihr/Downloads/220606_kasus_kako_harian_data.csv", 
+    col_types = cols(Tanggal = col_date(format = "%m/%d/%Y")))
+```
+
+```{r}
+data <- X220606_kasus_kako_harian_data
+head(data, 10)
+data_olah_Depok <- filter(data, Kab == "KOTA DEPOK")
+Rt_Depok <- data.frame(I = data_olah_Depok$`Kasus Harian`, dates = data_olah_Depok$Tanggal, Kab = data_olah_Depok$Kab)
+headdata <- head(Rt_Depok,25)
+DT::datatable(headdata)
+```
+
+# Membuat Kurva Epidemiologi, Tren, dan <i>Cleaning</i>
+
+<p>Tahapan-tahapan:</p>
+* Memangkas 7 baris pertama data_frame
+* Melihat <i>missing value</i>
+* Melakukan <i>7 day moving average</i>
+
+```{r}
+Rt_Depok <- Rt_Depok[order(as.Date(Rt_Depok$dates, format="%m/%d/%y")),]
+kasus_tanggal_Depok <- Rt_Depok[-c(1:7),]
+sum(is.na(Rt_Depok))                                 
+Rt_Depok$I[is.na(Rt_Depok$I)] = 0
+ggplot(kasus_tanggal_Depok, aes(dates,I)) + geom_bar(stat="identity")
+Rt_Depok2 <- Rt_Depok %>% mutate(dma = rollmean(I, k = 7, align = "right", fill = 0))
+a <- ggplot(Rt_Depok2, aes(dates,I)) + geom_bar(stat="identity", alpha = 0.3) + geom_line(aes(dates,dma),colour = "firebrick", size = 1.3)
+ggplotly(a)
+```
+
+# Menghitung Estimasi Rt
+
+Menggunakan formula `Epiestim` : (2)
+$$E[I_t]=R_t\sum_{s=1}^{t} I_t-_sW_s$$
+<p> Dengan interpretasi sebagai berikut: </p>
+* <b>lebih kecil 1</b> berarti tidak ada transmisi 
+* <b> sama dengan 1</b> berarti transmisi terkendali
+* <b> lebih dari 1</b> transmisi tidak terkendali
+
+<p> Pada model ini digunakan <i>Serial Interval</i> dari Song et.al yaitu (median = 3, SD = 2.5) (3)
+
+<p><b><i>*CATATAN:
+Dalam melihat nilai Rt harus memperhatikan kurva epidemiologi, dan utamanya dalam menafsirkan</b></i></p></body>
+
+```{r}
+res_parametric_si_Depok <- estimate_R(Rt_Depok, method="parametric_si", config = make_config(list(mean_si = 3, std_si = 2.5)))
+plot(res_parametric_si_Depok, legend = FALSE)
+R_epiestim_Depok <- data.frame(tanggal = kasus_tanggal_Depok$dates, kasus = kasus_tanggal_Depok$I, median_r = res_parametric_si_Depok$R$`Median(R)`, 
+                               std = res_parametric_si_Depok$R$`Std(R)`, Kab = kasus_tanggal_Depok$Kab)
+R_epiestim_Depok$bawah <- R_epiestim_Depok$median_r - R_epiestim_Depok$std
+R_epiestim_Depok$atas <- R_epiestim_Depok$median_r + R_epiestim_Depok$std
+R_epiestim_Depok$batas <- 1
+headdata2 <- head(R_epiestim_Depok,50)
+DT::datatable(headdata2)
+```
+
+# Membuat plot
+
+<p>Di sini akan dibuat plot atau grafik berdasarkan perhitungan Rt dan diperbandingkan dengan kurva epidemiologi. Saya juga akan membagi
+dua zonasi waktu: Sebelum Lebaran dan <style>mark { 
+  background-color: #c8eeee;
+}</style><mark>Setelah Lebaran</mark></p>
+
+```{r}
+ggplot(R_epiestim_Depok, aes(tanggal, median_r)) +                                     
+  geom_line(color = "firebrick", size = 1) + geom_ribbon(aes(ymin=bawah, ymax=atas), alpha=0.5, fill = "gray")
+
+R_epiestim_Depok <- R_epiestim_Depok %>% filter(tanggal > '2022-03-01')
+g <- ggplot(R_epiestim_Depok, aes(tanggal, median_r)) + 
+  geom_rect(data = R_epiestim_Depok, aes(xmin= as.Date("2022-05-01"), xmax= as.Date(last(tanggal)), ymin=-Inf, ymax=Inf), fill = '#c8eeee', alpha = 0.5) + 
+  geom_line(color = "firebrick", size = 1) + geom_ribbon(aes(ymin=bawah, ymax=atas), alpha=0.5, fill = "gray") +
+  geom_line(aes(y = batas), color="black", linetype="dashed") + theme_minimal() 
+g
+ggplotly(g)
+g2 <- ggplot(R_epiestim_Depok, aes(tanggal, kasus)) +
+  geom_rect(data = R_epiestim_Depok, aes(xmin= as.Date("2022-05-01"), xmax= as.Date(last(tanggal)), ymin=-Inf, ymax=Inf), fill = '#c8eeee', alpha = 0.5) +
+  geom_bar(fill = "deepskyblue", color = "black", stat = "identity") + theme_minimal()
+g2
+ggplotly(g2)
+
+```
+
+# Kesimpulan
+
+* Per awal Juni 2022, Kota Depok diestimasikan mengalami peningkatan Rt di atas 1 yang disertai peningkatan kasus, namun tidak signifikan
+* Untuk analisis lebih lanjut dapat lihat di Epihandbook atau Recon(R Epidemic Consortium) (4) (5)
+* Untuk bentuk sajian aplikasi lainnya dapat di <a href="https://shiny.dide.imperial.ac.uk/epiestim/">Shiny Web</a> atau <a href="http://tools.epidemiology.net/EpiEstim.xls">Excel</a>
+
+
+# Referensi
+1. WHO. Considerations for implementing and adjusting public health and social measures in the context of COVID-19. 14 June 2021.
+2. Anne Cori, Neil M. Ferguson, Christophe Fraser, Simon Cauchemez, A New Framework and Software to Estimate Time-Varying Reproduction Numbers During Epidemics, <i>American Journal of Epidemiology</i>, Volume 178, Issue 9, 1 November 2013, Pages 1505–1512, https://doi.org/10.1093/aje/kwt133
+3. Song JS, Lee J, Kim M, et al. Serial Intervals and Household Transmission of SARS-CoV-2 Omicron Variant, South Korea, 2021.<i>Emerging Infectious Diseases</i>. 2022;28(3):756-759. doi:10.3201/eid2803.212607.
+4. Epihandbook. <i>24. Epidemic Modeling<i>. https://epirhandbook.com/en/epidemic-modeling.html
+5. R Epidemic Consortium. <i>EpiEstim<i>. https://github.com/mrc-ide/EpiEstim
